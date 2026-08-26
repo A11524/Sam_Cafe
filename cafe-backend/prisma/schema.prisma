@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql" // Có thể đổi thành "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id       Int    @id @default(autoincrement())
+  username String @unique
+  password String
+  role     String
+}
+
+model Category {
+  id       Int       @id @default(autoincrement())
+  name     String
+  products Product[]
+}
+
+model Product {
+  id          String          @id
+  categoryId  Int
+  name        String
+  price       Int
+  isActive    Boolean         @default(true)
+  category    Category        @relation(fields: [categoryId], references: [id])
+  invoiceDocs InvoiceDetail[]
+}
+
+model Table {
+  id       String    @id
+  name     String
+  invoices Invoice[]
+}
+
+model Invoice {
+  id          String          @id
+  tableId     String
+  subtotal    Int
+  discount    Int             @default(0)
+  totalAmount Int
+  status      String          @default("PENDING") // PENDING, PAID, DEBT
+  createdAt   DateTime        @default(now())
+  table       Table           @relation(fields: [tableId], references: [id])
+  details     InvoiceDetail[]
+  // Bổ sung cột này để lưu Tiền mặt / Chuyển khoản
+  paymentMethod String?  @default("cash")
+}
+
+model InvoiceDetail {
+  id            Int     @id @default(autoincrement())
+  invoiceId     String
+  productId     String
+  quantity      Int
+  price         Int
+  note          String?
+  kitchenStatus String  @default("PENDING") // PENDING, PRINTED
+  invoice       Invoice @relation(fields: [invoiceId], references: [id])
+  product       Product @relation(fields: [productId], references: [id])
+}
