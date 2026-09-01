@@ -5,6 +5,7 @@ import '../api_service.dart';
 import '../utils/responsive.dart'; 
 import '../utils/print_service.dart'; 
 import 'package:flutter/foundation.dart'; // Thêm dòng này để dùng kIsWeb và TargetPlatform
+import 'dart:async';
 
 class POSScreen extends StatefulWidget {
   
@@ -41,11 +42,19 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
     {"id": 5, "name": "Điểm Tâm", "icon": Icons.fastfood},
   ];
 
+  Timer? _refreshTimer;
+
   @override
   void initState() {
     super.initState();
-    _initializeApp(); // Gọi hàm gộp để đảm bảo thứ tự tải dữ liệu
+    _initializeApp(); // Gọi hàm gộp để đảm bảo thứ tự tải dữ liệu (Trị lỗi trắng bàn)
+
+    // 🔥 CHÈN THÊM: ĐỒNG HỒ 5 GIÂY DỌN RÁC (Trị lỗi máy tính không mất Bill)
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      if (mounted) _syncActiveInvoices();
+    });
     
+    // GIỮ NGUYÊN 100% CODE SOCKET & MÁY IN CỦA BẠN
     try {
       ApiService.initSocket();
       
@@ -134,7 +143,14 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
     } catch (e) {}
   }
 
-  // Hàm mới gộp thứ tự chạy
+  // 🔥 CHÈN THÊM: HỦY ĐỒNG HỒ KHI THOÁT
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  // 🔥 ĐÃ SỬA LẠI THỨ TỰ TẢI CHUẨN XÁC
   void _initializeApp() async {
     await _loadProductsFromAPI(); // Bắt buộc tải Menu xong trước
     await _loadTablesFromAPI();   // Tải danh sách các ô vuông (Bàn)
@@ -196,30 +212,36 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
       if (!mounted) return;
 
       setState(() {
+        // Rổ chứa "ID Bàn" đang thực sự có bill trên Server
+        List<String> serverActiveTableIds = [];
+
         for (var invoice in activeInvoices) {
           String tId = '';
-          if (invoice['table'] != null && invoice['table']['name'] != null) {
-            tId = invoice['table']['name'].toString();
+          if (invoice['table'] != null && invoice['table']['id'] != null) {
+            tId = invoice['table']['id'].toString();
           } else if (invoice['tableId'] != null) {
             tId = invoice['tableId'].toString();
+          } else if (invoice['table'] != null && invoice['table']['name'] != null) {
+             tId = invoice['table']['name'].toString(); // Dự phòng
           }
           if (tId.isEmpty) continue;
 
-          String exactTableName = '';
+          String exactTableId = '';
           bool isTableExists = false;
           for (var t in _tables) {
-            if (t['name'].toString().toLowerCase() == tId.toLowerCase() ||
-                t['id'].toString().toLowerCase() == tId.toLowerCase()) {
-              exactTableName = t['name'].toString();
+            if (t['id'].toString().toLowerCase() == tId.toLowerCase() ||
+                t['name'].toString().toLowerCase() == tId.toLowerCase()) {
+              exactTableId = t['id'].toString(); // 🔥 CHỐT LẤY "ID BÀN" ĐỂ ĐỒNG BỘ
               isTableExists = true;
               break;
             }
           }
 
           if (!isTableExists) continue; 
-          List<dynamic> details = invoice['details'] ?? [];
-          if (details.isEmpty) continue; 
+          
+          serverActiveTableIds.add(exactTableId);
 
+          List<dynamic> details = invoice['details'] ?? [];
           List<CartItem> cartItems = [];
           for (var d in details) {
             String pId = d['productId']?.toString() ?? '';
@@ -232,11 +254,32 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
             );
             cartItems.add(CartItem(product: product, quantity: safeQty, note: d['note']?.toString() ?? ''));
           }
-          _tableOrders[exactTableName] = cartItems; 
+          
+          // 🔥 LÁ CHẮN BẢO VỆ MÓN CHƯA GỬI BẾP
+          String currentSelectedTableId = _selectedTable != null ? _selectedTable.toString() : '';
+          
+          if (currentSelectedTableId == exactTableId) {
+            // Nếu thu ngân đang đứng ở bàn này, CHỈ đồng bộ khi giỏ hàng trống 
+            // (tránh việc đồng hồ 5s xóa mất món thu ngân vừa bấm chọn chưa kịp gửi bếp)
+            if (_tableOrders[exactTableId] == null || _tableOrders[exactTableId]!.isEmpty) {
+              _tableOrders[exactTableId] = cartItems;
+            }
+          } else {
+            // Đang không thao tác ở bàn này thì hệ thống tự động cập nhật đè thoải mái
+            _tableOrders[exactTableId] = cartItems; 
+          }
         }
+
+        // 🔥 DỌN RÁC: Quét và xóa các bàn đã thanh toán
+        String currentSelectedTableId = _selectedTable != null ? _selectedTable.toString() : '';
+        _tableOrders.removeWhere((tableId, items) {
+           // Xóa nếu Server không có VÀ thu ngân không đứng ở bàn đó
+           return !serverActiveTableIds.contains(tableId) && tableId != currentSelectedTableId;
+        });
+        
       });
     } catch (e) {
-      print("Lỗi tải món: $e"); // Chuyển lỗi xuống console, không hiện lên màn hình nữa
+      print("Lỗi tải món: $e");
     }
   }
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api_service.dart'; // Nối với file API của bạn
 import 'main_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -39,11 +40,15 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       String role = await ApiService.login(username, password);
       
-      // (Tùy chọn) Kiểm tra xem tài khoản có khớp với Tab đang chọn không
       if (_isManagerTab && role != 'manager') {
         setState(() => _errorMessage = 'Tài khoản này không có quyền Quản lý!');
         return;
       }
+
+      // 🔥 CẤT TRẠNG THÁI VÀO KÉT SẮT
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('isLoggedIn', true);
+      await prefs.setString('userRole', role);
 
       if (!mounted) return;
       _navigateToMain(role);
@@ -53,9 +58,7 @@ class _LoginScreenState extends State<LoginScreen> {
         _errorMessage = 'Sai tài khoản hoặc mật khẩu!';
       });
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false); 
-      }
+      if (mounted) setState(() => _isLoading = false); 
     }
   }
 

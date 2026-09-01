@@ -6,6 +6,7 @@ import 'transaction_screen.dart';
 import 'shift_end_screen.dart';
 import 'revenue_screen.dart';
 import 'login_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // Thư viện Két sắt
 
 class MainScreen extends StatefulWidget {
   final String userRole; 
@@ -92,8 +93,19 @@ class _MainScreenState extends State<MainScreen> {
                         padding: const EdgeInsets.only(bottom: 16.0),
                         child: IconButton(
                           icon: const Icon(Icons.logout, color: Colors.red),
-                          onPressed: () {
-                            Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const LoginScreen()));
+                          onPressed: () async { // 🔥 Đổi thành async để gọi Két sắt
+                            // 1. Xóa sạch chìa khóa trong Két sắt
+                            final prefs = await SharedPreferences.getInstance();
+                            await prefs.clear();
+
+                            if (!context.mounted) return;
+                            
+                            // 2. Xóa lịch sử trang và văng ra màn Login
+                            Navigator.pushAndRemoveUntil(
+                              context,
+                              MaterialPageRoute(builder: (context) => const LoginScreen()),
+                              (route) => false,
+                            );
                           },
                         ),
                       ),
