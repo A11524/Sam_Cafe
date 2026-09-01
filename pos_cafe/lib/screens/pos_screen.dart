@@ -6,6 +6,7 @@ import '../utils/responsive.dart';
 import '../utils/print_service.dart'; 
 import 'package:flutter/foundation.dart'; // Thêm dòng này để dùng kIsWeb và TargetPlatform
 import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class POSScreen extends StatefulWidget {
   
@@ -62,32 +63,47 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
       ApiService.socket.on('table_updated', (data) {
         if (mounted) {
           setState(() {
-            if (data != null && data['tableId'] != null) {
-              String tId = data['tableId'].toString();
+            if (data != null) {
+              // 1. CÔNG NGHỆ DÒ TÌM ID (Hỗ trợ cả Bàn vật lý lẫn Đơn tạm)
+              String tId = data['tableId']?.toString() ?? '';
+              var invoice = data['invoice'];
               
-              if (data['invoice'] != null && data['invoice']['details'] != null) {
-                List<dynamic> details = data['invoice']['details'];
-                List<CartItem> updatedCart = [];
-                
-                for (var d in details) {
-                  String pId = d['productId'].toString();
-                  
-                  Product product = _products.firstWhere(
-                    (p) => p.id == pId, 
-                    orElse: () => Product(id: pId, name: 'Món $pId', price: d['price'] ?? 0, categoryId: 1, icon: Icons.local_cafe, color: Colors.grey)
-                  );
-                  
-                  updatedCart.add(CartItem(
-                    product: product,
-                    quantity: d['quantity'] ?? 1,
-                    note: d['note'] ?? ''
-                  ));
+              if (invoice != null) {
+                if (tId.isEmpty && invoice['tableId'] != null) {
+                  tId = invoice['tableId'].toString();
                 }
-                
-                _tableOrders[tId] = updatedCart; 
-              } 
-              else if (data['status'] == 'PAID') {
-                _tableOrders[tId] = []; 
+                if (tId.isEmpty && invoice['table'] != null) {
+                  tId = invoice['table']['name']?.toString() ?? invoice['table']['id']?.toString() ?? '';
+                }
+              }
+
+              // 2. NHẬN LỆNH VÀ ÉP CẬP NHẬT
+              if (tId.isNotEmpty) {
+                if (invoice != null && invoice['details'] != null) {
+                  List<dynamic> details = invoice['details'];
+                  List<CartItem> updatedCart = [];
+                  
+                  for (var d in details) {
+                    String pId = d['productId'].toString();
+                    Product product = _products.firstWhere(
+                      (p) => p.id == pId, 
+                      orElse: () => Product(id: pId, name: 'Món $pId', price: d['price'] ?? 0, categoryId: 1, icon: Icons.local_cafe, color: Colors.grey)
+                    );
+                    
+                    updatedCart.add(CartItem(
+                      product: product,
+                      quantity: d['quantity'] ?? 1,
+                      note: d['note'] ?? ''
+                    ));
+                  }
+                  
+                  // Xuyên thủng mọi lá chắn: Socket là lệnh tức thời -> Ép cập nhật ngay!
+                  _tableOrders[tId] = updatedCart; 
+                } 
+                else if (data['status'] == 'PAID' || (invoice != null && invoice['status'] == 'PAID')) {
+                  // Xóa sạch giỏ khi thanh toán toàn bộ
+                  _tableOrders[tId] = []; 
+                }
               }
             }
           });
@@ -212,34 +228,42 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
       if (!mounted) return;
 
       setState(() {
-        // Rổ chứa "ID Bàn" đang thực sự có bill trên Server
-        List<String> serverActiveTableIds = [];
+        List<String> serverActiveKeys = [];
+        
+        // 1. DỊCH NGÔN NGỮ CHÌA KHÓA BÀN ĐANG XEM (Chống lỗi Map vs String)
+        String currentKey = '';
+        if (_selectedTable != null) {
+          if (_selectedTable is Map) {
+            // Ép kiểu dứt khoát sang Map để trình biên dịch Dart hết "la làng"
+            final tableMap = _selectedTable as Map;
+            currentKey = tableMap['name']?.toString() ?? tableMap['id']?.toString() ?? '';
+          } else {
+            // Nếu là Đơn tạm (ảo), lấy trực tiếp tên chuỗi
+            currentKey = _selectedTable.toString();
+          }
+        }
 
+        // 2. NHẬN MỌI ĐƠN TỪ SERVER (Bao trọn gói Bàn vật lý & Đơn tạm)
         for (var invoice in activeInvoices) {
           String tId = '';
-          if (invoice['table'] != null && invoice['table']['id'] != null) {
-            tId = invoice['table']['id'].toString();
+          String tName = '';
+          
+          if (invoice['table'] != null) {
+            tId = invoice['table']['id']?.toString() ?? '';
+            tName = invoice['table']['name']?.toString() ?? '';
           } else if (invoice['tableId'] != null) {
             tId = invoice['tableId'].toString();
-          } else if (invoice['table'] != null && invoice['table']['name'] != null) {
-             tId = invoice['table']['name'].toString(); // Dự phòng
           }
-          if (tId.isEmpty) continue;
-
-          String exactTableId = '';
-          bool isTableExists = false;
-          for (var t in _tables) {
-            if (t['id'].toString().toLowerCase() == tId.toLowerCase() ||
-                t['name'].toString().toLowerCase() == tId.toLowerCase()) {
-              exactTableId = t['id'].toString(); // 🔥 CHỐT LẤY "ID BÀN" ĐỂ ĐỒNG BỘ
-              isTableExists = true;
-              break;
-            }
-          }
-
-          if (!isTableExists) continue; 
           
-          serverActiveTableIds.add(exactTableId);
+          // Bỏ qua rào cản, cứ có ID hoặc Tên là duyệt tất!
+          if (tId.isEmpty && tName.isEmpty) continue;
+
+          // Tạo chìa khóa: Ưu tiên dùng Tên bàn, nếu không có Tên thì dùng ID (cho Đơn tạm)
+          String invoiceKey = tName.isNotEmpty ? tName : tId;
+          
+          // Đánh dấu bàn này đang có khách trên Server
+          serverActiveKeys.add(invoiceKey);
+          if (tId.isNotEmpty) serverActiveKeys.add(tId); // Dự phòng thêm ID
 
           List<dynamic> details = invoice['details'] ?? [];
           List<CartItem> cartItems = [];
@@ -255,28 +279,29 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
             cartItems.add(CartItem(product: product, quantity: safeQty, note: d['note']?.toString() ?? ''));
           }
           
-          // 🔥 LÁ CHẮN BẢO VỆ MÓN CHƯA GỬI BẾP
-          String currentSelectedTableId = _selectedTable != null ? _selectedTable.toString() : '';
-          
-          if (currentSelectedTableId == exactTableId) {
-            // Nếu thu ngân đang đứng ở bàn này, CHỈ đồng bộ khi giỏ hàng trống 
-            // (tránh việc đồng hồ 5s xóa mất món thu ngân vừa bấm chọn chưa kịp gửi bếp)
-            if (_tableOrders[exactTableId] == null || _tableOrders[exactTableId]!.isEmpty) {
-              _tableOrders[exactTableId] = cartItems;
-            }
+          // 3. ĐẮP DỮ LIỆU VÀO GIỎ HÀNG ĐỒNG BỘ 2 MÁY
+          if (currentKey != invoiceKey && currentKey != tId) {
+            // Nếu máy ĐANG KHÔNG thao tác ở bàn này -> Tự động cập nhật số liệu mới nhất
+            _tableOrders[invoiceKey] = List.from(cartItems);
           } else {
-            // Đang không thao tác ở bàn này thì hệ thống tự động cập nhật đè thoải mái
-            _tableOrders[exactTableId] = cartItems; 
+            // LÁ CHẮN: Nếu máy ĐANG XEM bàn này -> Chỉ đắp dữ liệu nếu giỏ đang trống 
+            // (Chống làm mất món mà thu ngân vừa chọn chưa kịp gửi bếp)
+            if (_tableOrders[invoiceKey] == null || _tableOrders[invoiceKey]!.isEmpty) {
+              _tableOrders[invoiceKey] = List.from(cartItems);
+            }
           }
         }
 
-        // 🔥 DỌN RÁC: Quét và xóa các bàn đã thanh toán
-        String currentSelectedTableId = _selectedTable != null ? _selectedTable.toString() : '';
-        _tableOrders.removeWhere((tableId, items) {
-           // Xóa nếu Server không có VÀ thu ngân không đứng ở bàn đó
-           return !serverActiveTableIds.contains(tableId) && tableId != currentSelectedTableId;
+        // 4. DỌN DẸP RÁC
+        _tableOrders.removeWhere((key, items) {
+           // Xóa sạch giỏ hàng nếu Server báo đã thanh toán VÀ thu ngân không đứng ở bàn đó
+           return !serverActiveKeys.contains(key.toString()) && key.toString() != currentKey;
         });
-        
+
+        // 5. CHỐNG VĂNG APP
+        if (currentKey.isNotEmpty) {
+          _tableOrders[currentKey] ??= [];
+        }
       });
     } catch (e) {
       print("Lỗi tải món: $e");
