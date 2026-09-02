@@ -38,9 +38,19 @@ class ApiService {
   }
 
   static Future<List<dynamic>> getProducts() async {
+    // Tạo dấu thời gian để đánh lừa bộ nhớ đệm
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    
     final response = await http.get(
-      Uri.parse('$baseUrl/api/products'),
-      headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+      Uri.parse('$baseUrl/api/products?t=$timestamp'), // Gắn thời gian vào đuôi link
+      headers: {
+        'Content-Type': 'application/json', 
+        'ngrok-skip-browser-warning': 'true',
+        // Bùa cấm trình duyệt lưu cache
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+      },
     );
     if (response.statusCode == 200) return jsonDecode(response.body) as List<dynamic>;
     throw Exception('Failed to load products');
@@ -106,9 +116,19 @@ class ApiService {
   }
 
   static Future<List<dynamic>> getTables() async {
+    // Tạo dấu thời gian để đánh lừa bộ nhớ đệm
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    
     final response = await http.get(
-      Uri.parse('$baseUrl/api/tables'),
-      headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+      Uri.parse('$baseUrl/api/tables?t=$timestamp'), // Gắn thời gian vào đuôi link
+      headers: {
+        'Content-Type': 'application/json', 
+        'ngrok-skip-browser-warning': 'true',
+        // Bùa cấm trình duyệt lưu cache
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+      },
     );
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
@@ -210,16 +230,30 @@ class ApiService {
 
   static Future<List<dynamic>> getActiveInvoices() async {
     try {
+      // 1. Tạo một dãy số thời gian ngẫu nhiên chạy liên tục
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      
+      // 2. Gắn dãy số này vào đuôi link. Mỗi lần gọi là 1 link khác nhau -> Trình duyệt bó tay, không thể dùng Cache cũ!
+      // (Tui giữ nguyên lệnh http.post theo đúng chuẩn Backend của bạn)
       final response = await http.post(
-        Uri.parse('$baseUrl/api/invoices/active'),
-        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+        Uri.parse('$baseUrl/api/invoices/active?t=$timestamp'),
+        headers: {
+          'Content-Type': 'application/json', 
+          'ngrok-skip-browser-warning': 'true',
+          // 3. BỘ BÙA CHÚ CẤM TRÌNH DUYỆT LƯU ĐỆM DỮ LIỆU
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0',
+        },
       );
+      
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['success'] == true) return data['data']; 
       }
       return [];
     } catch (e) {
+      print("Lỗi getActiveInvoices: $e");
       return [];
     }
   }

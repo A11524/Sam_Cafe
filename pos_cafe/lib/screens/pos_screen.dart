@@ -166,11 +166,20 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
     super.dispose();
   }
 
-  // 🔥 ĐÃ SỬA LẠI THỨ TỰ TẢI CHUẨN XÁC
-  void _initializeApp() async {
-    await _loadProductsFromAPI(); // Bắt buộc tải Menu xong trước
-    await _loadTablesFromAPI();   // Tải danh sách các ô vuông (Bàn)
-    await _syncActiveInvoices();  // Bắt đầu đắp món ăn vào các bàn
+  Future<void> _initializeApp() async {
+    try {
+      // 1. BẮT BUỘC tải Món và tải Bàn trước
+      await _loadProductsFromAPI(); 
+      await _loadTablesFromAPI();   
+
+      // 2. Dừng lại nửa giây cho giao diện vẽ sơ đồ bàn xong xuôi
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // 3. Chốt sổ: Đắp hóa đơn vào sơ đồ bàn đã vẽ
+      await _syncActiveInvoices();  
+    } catch (e) {
+      print("Lỗi khởi tạo dữ liệu: $e");
+    }
   }
 
   // Sửa lại: Thêm Future<void> để có thể dùng lệnh await
