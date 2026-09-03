@@ -103,6 +103,23 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
                 else if (data['status'] == 'PAID' || (invoice != null && invoice['status'] == 'PAID')) {
                   // Xóa sạch giỏ khi thanh toán toàn bộ
                   _tableOrders[tId] = []; 
+                  
+                  // 🔥 BƠM THÊM LOGIC XÓA BÀN TẠM KHỎI MÀN HÌNH
+                  if (tId.toLowerCase().contains('tam')) {
+                    // Xóa hẳn nút bấm Bàn tạm khỏi sơ đồ
+                    _tables.removeWhere((t) => t['id']?.toString() == tId || t['name']?.toString() == tId);
+                    
+                    // Lấy chìa khóa bàn Quản lý đang xem
+                    String currentKey = '';
+                    if (_selectedTable != null) {
+                      currentKey = (_selectedTable is Map) ? ((_selectedTable as Map)['id']?.toString() ?? '') : _selectedTable.toString();
+                    }
+                    
+                    // Đá văng ra ngoài, đóng khung order nếu đang xem đúng cái Bàn tạm này
+                    if (currentKey == tId) {
+                      _selectedTable = '';
+                    }
+                  }
                 }
               }
             }
@@ -238,43 +255,53 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
 
       setState(() {
         List<String> serverActiveKeys = [];
-        
-        // 1. DỊCH NGÔN NGỮ CHÌA KHÓA BÀN ĐANG XEM (Chống lỗi Map vs String)
         String currentKey = '';
+
         if (_selectedTable != null) {
-          if (_selectedTable is Map) {
-            // Ép kiểu dứt khoát sang Map để trình biên dịch Dart hết "la làng"
-            final tableMap = _selectedTable as Map;
-            currentKey = tableMap['name']?.toString() ?? tableMap['id']?.toString() ?? '';
-          } else {
-            // Nếu là Đơn tạm (ảo), lấy trực tiếp tên chuỗi
-            currentKey = _selectedTable.toString();
-          }
+          currentKey = (_selectedTable is Map) ? ((_selectedTable as Map)['id']?.toString() ?? '') : _selectedTable.toString();
         }
 
-        // 2. NHẬN MỌI ĐƠN TỪ SERVER (Bao trọn gói Bàn vật lý & Đơn tạm)
         for (var invoice in activeInvoices) {
-          String tId = '';
-          String tName = '';
-          
+          String tIdStr = invoice['tableId']?.toString() ?? '';
+          String tName = invoice['tableName']?.toString() ?? '';
+
           if (invoice['table'] != null) {
-            tId = invoice['table']['id']?.toString() ?? '';
-            tName = invoice['table']['name']?.toString() ?? '';
-          } else if (invoice['tableId'] != null) {
-            tId = invoice['tableId'].toString();
+            tIdStr = invoice['table']['id']?.toString() ?? tIdStr;
+            tName = invoice['table']['name']?.toString() ?? tName;
           }
-          
-          // Bỏ qua rào cản, cứ có ID hoặc Tên là duyệt tất!
-          if (tId.isEmpty && tName.isEmpty) continue;
+          if (tIdStr.isEmpty && tName.isEmpty) continue;
 
-          // Tạo chìa khóa: Ưu tiên dùng Tên bàn, nếu không có Tên thì dùng ID (cho Đơn tạm)
-          String invoiceKey = tName.isNotEmpty ? tName : tId;
-          
-          // Đánh dấu bàn này đang có khách trên Server
-          serverActiveKeys.add(invoiceKey);
-          if (tId.isNotEmpty) serverActiveKeys.add(tId); // Dự phòng thêm ID
+          // Lấy danh sách món
+          List<dynamic> details = invoice['details'] ?? invoice['items'] ?? invoice['products'] ?? [];
 
-          List<dynamic> details = invoice['details'] ?? [];
+          // 🔥 LƯỚI LỌC RÁC: Nếu là Bàn Tạm mà KHÔNG CÓ MÓN (bị kẹt trong DB) -> Bỏ qua, không thèm hiển thị!
+          bool isTemp = tIdStr.toLowerCase().contains('tam') || tName.toLowerCase().contains('tam');
+          if (isTemp && details.isEmpty) {
+            continue; 
+          }
+
+          serverActiveKeys.add(tIdStr);
+          if (tName.isNotEmpty) serverActiveKeys.add(tName);
+
+          dynamic exactKey = tIdStr;
+          bool isTableInGrid = false;
+          for (var t in _tables) {
+            if (t['id']?.toString() == tIdStr || t['name']?.toString() == tName) {
+              exactKey = t['id'];
+              isTableInGrid = true;
+              break;
+            }
+          }
+
+          // TỰ ĐỘNG VẼ BÀN TẠM
+          if (!isTableInGrid && isTemp) {
+            _tables.add({
+              'id': tIdStr.isNotEmpty ? tIdStr : tName,
+              'name': tName.isNotEmpty ? tName : tIdStr,
+              'status': 'ACTIVE'
+            });
+          }
+
           List<CartItem> cartItems = [];
           for (var d in details) {
             String pId = d['productId']?.toString() ?? '';
@@ -287,33 +314,42 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
             );
             cartItems.add(CartItem(product: product, quantity: safeQty, note: d['note']?.toString() ?? ''));
           }
-          
-          // 3. ĐẮP DỮ LIỆU VÀO GIỎ HÀNG ĐỒNG BỘ 2 MÁY
-          if (currentKey != invoiceKey && currentKey != tId) {
-            // Nếu máy ĐANG KHÔNG thao tác ở bàn này -> Tự động cập nhật số liệu mới nhất
-            _tableOrders[invoiceKey] = List.from(cartItems);
-          } else {
-            // LÁ CHẮN: Nếu máy ĐANG XEM bàn này -> Chỉ đắp dữ liệu nếu giỏ đang trống 
-            // (Chống làm mất món mà thu ngân vừa chọn chưa kịp gửi bếp)
-            if (_tableOrders[invoiceKey] == null || _tableOrders[invoiceKey]!.isEmpty) {
-              _tableOrders[invoiceKey] = List.from(cartItems);
-            }
-          }
+
+          _tableOrders[exactKey] = List.from(cartItems);
+          _tableOrders[tIdStr] = List.from(cartItems);
+          if (tName.isNotEmpty) _tableOrders[tName] = List.from(cartItems);
         }
 
-        // 4. DỌN DẸP RÁC
-        _tableOrders.removeWhere((key, items) {
-           // Xóa sạch giỏ hàng nếu Server báo đã thanh toán VÀ thu ngân không đứng ở bàn đó
-           return !serverActiveKeys.contains(key.toString()) && key.toString() != currentKey;
+        // =================================================================
+        // 🔥 QUÉT DỌN BÓNG MA VÀ XÓA BÀN TẠM ĐÃ THANH TOÁN TẬN GỐC
+        // =================================================================
+        final keysToRemove = [];
+        _tableOrders.forEach((key, value) {
+          if (!serverActiveKeys.contains(key.toString())) {
+            keysToRemove.add(key);
+          }
         });
 
-        // 5. CHỐNG VĂNG APP
-        if (currentKey.isNotEmpty) {
-          _tableOrders[currentKey] ??= [];
+        for (var key in keysToRemove) {
+          _tableOrders[key] = []; 
+          String keyStr = key.toString();
+
+          if (keyStr.toLowerCase().contains('tam')) {
+            _tables.removeWhere((t) => t['id']?.toString() == keyStr || t['name']?.toString() == keyStr);
+            _tableOrders.remove(key);
+            if (currentKey == keyStr) {
+               _selectedTable = ''; // Fix lỗi Null an toàn
+            }
+          } else {
+             if (currentKey == keyStr) {
+               _tableOrders[key] = [];
+             }
+          }
         }
+        // =================================================================
       });
     } catch (e) {
-      print("Lỗi tải món: $e");
+      print("Lỗi đồng bộ hóa đơn: $e");
     }
   }
 

@@ -113,6 +113,13 @@ class ApiService {
       body: jsonEncode({"tableId": tableId, "paymentMethod": paymentMethod}),
     );
     if (response.statusCode != 200) throw Exception("Lỗi khi chốt bill");
+
+    // 🚨 Đợi Database cập nhật xong (500ms) rồi mới hét lên cho Quản lý biết
+    if (socket.connected) {
+      Future.delayed(const Duration(milliseconds: 500), () {
+        socket.emit('trigger_global_sync');
+      });
+    }
   }
 
   static Future<List<dynamic>> getTables() async {
@@ -162,7 +169,16 @@ class ApiService {
         headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
         body: jsonEncode({'oldTableId': oldTableId, 'newTableId': newTableId}),
       );
-      return response.statusCode == 200;
+      if (response.statusCode == 200) {
+        // 🚨 Đợi Database cập nhật xong (500ms)
+        if (socket.connected) {
+          Future.delayed(const Duration(milliseconds: 500), () {
+            socket.emit('trigger_global_sync');
+          });
+        }
+        return true;
+      }
+      return false;
     } catch (e) {
       return false;
     }
@@ -183,6 +199,13 @@ class ApiService {
       body: jsonEncode({"tableId": tableId, "paymentMethod": paymentMethod, "itemsToPay": itemsToPay}),
     );
     if (response.statusCode != 200) throw Exception("Lỗi khi thanh toán tách món");
+
+    // 🚨 Đợi Database cập nhật xong (500ms)
+    if (socket.connected) {
+      Future.delayed(const Duration(milliseconds: 500), () {
+        socket.emit('trigger_global_sync');
+      });
+    }
   }
 
   static Future<Map<String, dynamic>> getRevenueReport(String filter) async {
@@ -230,21 +253,19 @@ class ApiService {
 
   static Future<List<dynamic>> getActiveInvoices() async {
     try {
-      // 1. Tạo một dãy số thời gian ngẫu nhiên chạy liên tục
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       
-      // 2. Gắn dãy số này vào đuôi link. Mỗi lần gọi là 1 link khác nhau -> Trình duyệt bó tay, không thể dùng Cache cũ!
-      // (Tui giữ nguyên lệnh http.post theo đúng chuẩn Backend của bạn)
+      // BẮT BUỘC DÙNG http.post NHƯ CODE GỐC CỦA BẠN
       final response = await http.post(
         Uri.parse('$baseUrl/api/invoices/active?t=$timestamp'),
         headers: {
           'Content-Type': 'application/json', 
           'ngrok-skip-browser-warning': 'true',
-          // 3. BỘ BÙA CHÚ CẤM TRÌNH DUYỆT LƯU ĐỆM DỮ LIỆU
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           'Pragma': 'no-cache',
           'Expires': '0',
         },
+        body: jsonEncode({}), 
       );
       
       if (response.statusCode == 200) {
