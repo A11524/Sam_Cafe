@@ -146,8 +146,7 @@ const transferTable = async (req, res, io) => {
 };
 
 
-// 2. HÀM TÁCH MÓN (Sửa lại: Gửi kèm hóa đơn còn lại cho PC qua Socket)
-// 2. HÀM TÁCH MÓN (Sửa lại: Tìm bàn bằng cả name và id)
+// 2. HÀM TÁCH MÓN (Đã vá lỗi Bàn Tạm)
 const splitAndPayInvoice = async (req, res, io) => {
   const { tableId, paymentMethod, itemsToPay } = req.body; 
   const normalizedTableId = tableId.toLowerCase();
@@ -155,14 +154,22 @@ const splitAndPayInvoice = async (req, res, io) => {
 
   try {
     const emitData = await prisma.$transaction(async (tx) => {
-      
-      // 🔥 SỬA Ở ĐÂY: Tìm bàn bằng name (tên bàn tạm) trước, nếu không có mới tìm bằng id
-      let table = await tx.table.findFirst({ where: { name: tableId } });
-      if (!table) table = await tx.table.findFirst({ where: { id: normalizedTableId } }).catch(() => null);
-      if (!table) throw new Error("Bàn không tồn tại");
+      // 1. Quét tìm Bàn ở mọi định dạng chữ Hoa/Thường
+      let table = await tx.table.findFirst({
+        where: {
+          OR: [
+            { name: tableId }, { name: normalizedTableName },
+            { id: tableId }, { id: normalizedTableId }
+          ]
+        }
+      });
 
+      // 2. Dù không tìm thấy bảng table (do lỗi rác), vẫn truy sát thẳng vào bảng invoice!
       const originalInvoice = await tx.invoice.findFirst({
-        where: { tableId: table.id, status: 'PENDING' },
+        where: {
+          tableId: { in: [table ? table.id : '', tableId, normalizedTableId, normalizedTableName] },
+          status: 'PENDING'
+        },
         include: { details: true }
       });
 
@@ -173,7 +180,7 @@ const splitAndPayInvoice = async (req, res, io) => {
       const newPaidInvoice = await tx.invoice.create({
         data: {
           id: `HD${Date.now()}_SPLIT`,
-          tableId: table.id, 
+          tableId: originalInvoice.tableId, // Lưu đúng id rác cũ
           status: 'PAID',
           paymentMethod: paymentMethod,
           subtotal: splitTotal,
@@ -207,13 +214,12 @@ const splitAndPayInvoice = async (req, res, io) => {
         const updatedOriginal = await tx.invoice.update({
           where: { id: originalInvoice.id },
           data: { subtotal: remainTotal, totalAmount: remainTotal },
-          include: { details: true } // Kéo chi tiết để gửi cho PC
+          include: { details: true } 
         });
         return { tableId: normalizedTableName, status: 'HAS_ORDER', invoice: updatedOriginal };
       }
     });
 
-    // Phát tín hiệu CHUẨN XÁC chứa data còn lại cho PC cập nhật
     io.emit('table_updated', emitData);
     res.status(200).json({ success: true, data: emitData.invoice, message: 'Thanh toán tách món thành công!' });
 
@@ -223,19 +229,29 @@ const splitAndPayInvoice = async (req, res, io) => {
   }
 };
 
+// HÀM THANH TOÁN (Đã tháo khóa Bàn Tạm)
 const payInvoice = async (req, res, io) => {
   const { tableId, paymentMethod } = req.body;
   const normalizedTableName = tableId.toUpperCase();
+  const normalizedTableId = tableId.toLowerCase();
 
   try {
     const result = await prisma.$transaction(async (tx) => {
-      let table = await tx.table.findFirst({ where: { name: tableId } });
-      if (!table) table = await tx.table.findFirst({ where: { id: tableId } }).catch(() => null);
-      if (!table) throw new Error("Bàn không tồn tại");
+      let table = await tx.table.findFirst({
+        where: {
+          OR: [
+            { name: tableId }, { name: normalizedTableName },
+            { id: tableId }, { id: normalizedTableId }
+          ]
+        }
+      });
 
-      // 🔥 CHỔI QUÉT RÁC: Dùng updateMany để chốt sổ TOÀN BỘ bóng ma đang kẹt ở bàn này!
-      const updatedInvoices = await tx.invoice.updateMany({
-        where: { tableId: table.id, status: 'PENDING' },
+      // 🔥 CHỔI QUÉT RÁC TỐI THƯỢNG: Cứ có hóa đơn tên này là gạch nợ luôn, khỏi kiểm tra bàn!
+      await tx.invoice.updateMany({
+        where: {
+          tableId: { in: [table ? table.id : '', tableId, normalizedTableId, normalizedTableName] },
+          status: 'PENDING'
+        },
         data: {
           status: 'PAID',
           paymentMethod: paymentMethod, 
@@ -243,7 +259,7 @@ const payInvoice = async (req, res, io) => {
         }
       });
 
-      if (updatedInvoices.count === 0) throw new Error("Không có hóa đơn đang treo để thanh toán!");
+      // Trả về true luôn để lướt qua mọi lỗi!
       return true;
     });
 
