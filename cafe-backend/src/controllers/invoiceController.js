@@ -65,6 +65,11 @@ const createOrUpdateInvoice = async (req, res, io) => {
     });
 
     io.emit('table_updated', { tableId: normalizedTableName, status: 'HAS_ORDER', invoice: result });
+    // 🔥 TỰ ĐỘNG PHÁT LỆNH IN BẾP CHO MÁY TÍNH WINDOWS
+    io.emit('print_kitchen_command', { 
+      tableId: normalizedTableName, 
+      items: items // Truyền luôn danh sách món vừa order để máy in chạy
+    });
     res.status(200).json({ success: true, data: result });
 
   } catch (error) {

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../api_service.dart';
+import 'package:flutter/foundation.dart';
 
 // Import PrintService 
 import '../utils/print_service.dart'; 
@@ -329,39 +330,52 @@ class _ShiftEndScreenState extends State<ShiftEndScreen> {
           ),
           const SizedBox(height: 40),
           SizedBox(
-            width: double.infinity,
-            height: 50,
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF005BAC), foregroundColor: Colors.white),
-              onPressed: () async {
-                // TÍCH HỢP IN BÁO CÁO KẾT CA
-                try {
-                  await PrintService.printShiftReport(
-                    _invoiceCount,
-                    _totalRevenue,
-                    _startingCash,
-                    _actualCash,
-                    _difference,
-                  );
-                } catch (e) {
-                  print("Lỗi in ấn: $e");
-                }
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF005BAC), foregroundColor: Colors.white),
+                onPressed: () async {
+                  // 🔥 BỘ LỌC THÔNG MINH: IN KẾT CA
+                  try {
+                    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+                      // Máy tính Windows in thẳng
+                      await PrintService.printShiftReport(
+                        _invoiceCount,
+                        _totalRevenue,
+                        _startingCash,
+                        _actualCash,
+                        _difference,
+                      );
+                    } else {
+                      // Điện thoại ném lệnh qua Socket
+                      ApiService.socket.emit('request_print_shift_end', {
+                        'invoiceCount': _invoiceCount,
+                        'totalRevenue': _totalRevenue,
+                        'startingCash': _startingCash,
+                        'actualCash': _actualCash,
+                        'difference': _difference,
+                      });
+                    }
+                  } catch (e) {
+                    print("Lỗi in ấn: $e");
+                  }
 
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Đã lưu báo cáo và in kết ca thành công!")));
-                
-                Future.delayed(const Duration(milliseconds: 1500), () {
-                  Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(
-                      builder: (context) => const LoginScreen(), 
-                    ),
-                    (Route<dynamic> route) => false, 
-                  );
-                });
-              },
-              child: const Text("XÁC NHẬN & IN KẾT CA", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            ),
-          )
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Đã lưu báo cáo và xử lý lệnh in!")));
+                  
+                  // Chờ 1.5 giây rồi về Đăng Nhập
+                  Future.delayed(const Duration(milliseconds: 1500), () {
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(
+                        builder: (context) => const LoginScreen(), 
+                      ),
+                      (Route<dynamic> route) => false, 
+                    );
+                  });
+                },
+                child: const Text("XÁC NHẬN & IN KẾT CA", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+            )
         ],
       ),
     );

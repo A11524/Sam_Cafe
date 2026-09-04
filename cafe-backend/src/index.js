@@ -42,6 +42,55 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log(`[-] Thiết bị ngắt kết nối: ${socket.id}`);
   });
+
+  // ========================================================
+  // 1. TRẠM TRUNG CHUYỂN: IN BILL & TẠM TÍNH
+  // ========================================================
+  socket.on('request_print_bill', (data) => {
+    io.emit('execute_print_bill', data);
+  });
+
+  socket.on('request_print_temp_bill', (data) => {
+    io.emit('execute_print_temp_bill', data);
+  });
+
+  // ========================================================
+  // 2. TRẠM TRUNG CHUYỂN: IN KẾT CA
+  // ========================================================
+  socket.on('request_print_shift_end', (data) => {
+    io.emit('execute_print_shift_end', data);
+  });
+
+  // ========================================================
+  // 3. ĐƯỜNG HẦM XUYÊN CACHE (GLOBAL SYNC) - TRỊ BÓNG MA
+  // ========================================================
+  socket.on('request_sync_invoices', async () => {
+    try {
+      const { PrismaClient } = require('@prisma/client');
+      const prisma = new PrismaClient();
+      const activeInvoices = await prisma.invoice.findMany({
+        where: { status: 'PENDING' },
+        include: { table: true, details: true }
+      });
+      socket.emit('sync_data_response', { success: true, data: activeInvoices });
+    } catch (error) {
+      console.error("Lỗi đồng bộ qua Socket:", error);
+    }
+  });
+
+  socket.on('trigger_global_sync', async () => {
+    try {
+      const { PrismaClient } = require('@prisma/client');
+      const prisma = new PrismaClient();
+      const activeInvoices = await prisma.invoice.findMany({
+        where: { status: 'PENDING' },
+        include: { table: true, details: true }
+      });
+      io.emit('sync_data_response', { success: true, data: activeInvoices });
+    } catch (error) {
+      console.error("Lỗi đồng bộ toàn cục:", error);
+    }
+  });
 });
 
 // --- API ENDPOINTS ---

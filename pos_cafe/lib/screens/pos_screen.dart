@@ -158,6 +158,55 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
           }
         }
       });
+
+      // ======================================================
+      // LẮNG NGHE & IN HÓA ĐƠN CHÍNH THỨC / TẠM TÍNH
+      // ======================================================
+      ApiService.socket.on('execute_print_bill', (data) async {
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+          if (data != null) {
+            String tId = data['tableId'].toString();
+            int totalAmount = int.tryParse(data['totalAmount'].toString()) ?? 0;
+            List<dynamic> rawItems = data['items'] ?? [];
+            List<Map<String, dynamic>> items = rawItems.map((e) => Map<String, dynamic>.from(e)).toList();
+            
+            // Gọi hàm in Bill
+            await PrintService.printCustomerReceipt(tId, totalAmount, items);
+          }
+        }
+      });
+
+      ApiService.socket.on('execute_print_temp_bill', (data) async {
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+          if (data != null) {
+            String tId = data['tableId'].toString();
+            int totalAmount = int.tryParse(data['totalAmount'].toString()) ?? 0;
+            List<dynamic> rawItems = data['items'] ?? [];
+            List<Map<String, dynamic>> items = rawItems.map((e) => Map<String, dynamic>.from(e)).toList();
+            
+            // Dùng chung hàm in Bill cho tạm tính (hoặc bạn có thể tạo hàm riêng)[cite: 7]
+            await PrintService.printCustomerReceipt(tId + " (TẠM TÍNH)", totalAmount, items);
+          }
+        }
+      });
+
+      // ======================================================
+      // LẮNG NGHE & IN BÁO CÁO KẾT CA
+      // ======================================================
+      ApiService.socket.on('execute_print_shift_end', (data) async {
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+          if (data != null) {
+            int invoiceCount = int.tryParse(data['invoiceCount'].toString()) ?? 0;
+            int totalRevenue = int.tryParse(data['totalRevenue'].toString()) ?? 0;
+            int startingCash = int.tryParse(data['startingCash'].toString()) ?? 0;
+            int actualCash = int.tryParse(data['actualCash'].toString()) ?? 0;
+            int difference = int.tryParse(data['difference'].toString()) ?? 0;
+
+            // Gọi hàm in Kết ca[cite: 7]
+            await PrintService.printShiftReport(invoiceCount, totalRevenue, startingCash, actualCash, difference);
+          }
+        }
+      });
       // ======================================================
 
       ApiService.socket.on('new_table_added', (data) {
@@ -839,19 +888,29 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
                 ),
                 onPressed: () async {
                   Navigator.pop(ctx);
+                  
                   List<Map<String, dynamic>> printItems = currentCart.map((item) => {
-                    "name": item.product.name, "quantity": item.quantity, "price": item.product.price,
+                    "name": item.product.name, 
+                    "quantity": item.quantity, 
+                    "price": item.product.price,
                   }).toList();
                   
-                  // KIỂM TRA MÁY TÍNH MỚI CHO IN
+                  // 🔥 BỘ LỌC THÔNG MINH: PC IN TRỰC TIẾP, ĐIỆN THOẠI BẮN SOCKET
                   if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
-                    await PrintService.printCustomerReceipt(_selectedTable, _subtotal, printItems);
+                    // Máy tính Windows in ngay lập tức
+                    await PrintService.printCustomerReceipt("TẠM TÍNH - $_selectedTable", _subtotal, printItems);
                     if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Đã in phiếu tạm tính!"), backgroundColor: Colors.blue));
                     }
                   } else {
+                    // Điện thoại gửi lệnh qua quầy thu ngân
+                    ApiService.socket.emit('request_print_temp_bill', {
+                      'tableId': _selectedTable,
+                      'totalAmount': _subtotal,
+                      'items': printItems
+                    });
                     if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Tính năng in chỉ hỗ trợ trên máy tính thu ngân!"), backgroundColor: Colors.orange));
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Đã gửi lệnh In Tạm Tính xuống quầy!"), backgroundColor: Colors.blue));
                     }
                   }
                 },
@@ -1082,13 +1141,25 @@ class _POSScreenState extends State<POSScreen> with AutomaticKeepAliveClientMixi
       // 2. Tắt vòng xoay Loading khi Server đã chốt xong
       if (mounted) Navigator.pop(context);
 
-      // In hóa đơn trên Windows
+      String currentKeyStr = (_selectedTable is Map) 
+          ? ((_selectedTable as Map)['name']?.toString() ?? (_selectedTable as Map)['id']?.toString() ?? '') 
+          : _selectedTable.toString();
+
+      // 🔥 BỘ LỌC THÔNG MINH: PC IN TRỰC TIẾP, ĐIỆN THOẠI BẮN SOCKET
       if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+        // Nếu là phần mềm cài trên máy tính Windows -> In trực tiếp, không cần chờ mạng!
         try {
-          await PrintService.printCustomerReceipt(_selectedTable, _subtotal, printItems);
+          await PrintService.printCustomerReceipt(currentKeyStr, _subtotal, printItems);
         } catch (e) {
           print("Lỗi máy in: $e");
         }
+      } else {
+        // Nếu là điện thoại/web -> Thét lên Server nhờ máy tính Windows in hộ!
+        ApiService.socket.emit('request_print_bill', {
+          'tableId': currentKeyStr,
+          'totalAmount': _subtotal,
+          'items': printItems
+        });
       }
       
       if (!mounted) return;
